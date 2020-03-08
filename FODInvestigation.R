@@ -8,6 +8,21 @@
 ##################################################################################################################
 
 library(RODBC)
+library(rlang) 
+library(maptools) 
+library(rgdal) 
+library(GISTools) 
+library(dplyr)
+library(plyr)
+library(lwgeom)
+library(sf)
+library(sp)
+library(gdalUtils)
+library(ggplot2)
+library(rgdal)
+library(raster) 
+library(rgeos)
+library(data.table)
 
 ##################################################################################################################
 ## Section: Set global directory locations
@@ -70,6 +85,83 @@ library(maps)
 plot(fpafod$LONGITUDE, fpafod$LATITUDE, ylim=c(17,80), xlim=c(-180,-55), type = "n")
 map("world", add = TRUE, lwd = 2, col = "gray")
 points(fpafod$LONGITUDE, fpafod$LATITUDE, pch = 16, cex=0.2, col="red")
+
+# Read county shapefile, extract coterminous US only
+Cnty_shp <- readOGR('C:/GitRepositories/R_CommonData/tl_2016_us_county.shp') 
+Cnty_shp <- spTransform(Cnty_shp, CRS('+proj=longlat +ellps=WGS84 +datum=WGS84'))
+head(Cnty_shp@data)
+names(Cnty_shp@data)
+class(Cnty_shp$STATEFP)
+i <- sapply(Cnty_shp@data, is.factor)
+Cnty_shp@data[i] <- lapply(Cnty_shp@data[i], as.character)
+Cnty_shp.DT <- setDT(Cnty_shp@data)
+Cnty_shp.DT_uni <- unique(Cnty_shp.DT, by = c('STATEFP'))
+setorder(Cnty_shp.DT_uni, STATEFP)
+ststdrp <- c('02','15','60','66','69','72','78')
+sp.polys <- subset(Cnty_shp, !(STATEFP %in% ststdrp))
+#plot(sp.polys)
+
+# Ivestigate sp.polys
+sp.polys@data$idin <- attr(sp.polys@data, "row.names") # Returns integers
+str(sp.polys)
+slotNames(sp.polys@polygons[[1]])
+all(lapply(sp.polys@polygons, slot, "ID") == row.names(sp.polys))
+summary(as.integer(lapply(sp.polys@polygons, slot, "ID")))
+class(sp.polys@data)
+head(sp.polys@data)
+levels(sp.polys@data$GEOID)
+
+# Read MTBS wildfire polygons
+MTBS_shp <- readOGR('C:/ImportantGeneralGISData/Wildfire/GIS/MTBS/mtbs_perims_1984-2015_DD_20170815.shp') 
+MTBS_shp <- spTransform(MTBS_shp, CRS('+proj=longlat +ellps=WGS84 +datum=WGS84'))
+
+# Subset based on area 
+i <- sapply(MTBS_shp@data, is.factor)
+MTBS_shp@data[i] <- lapply(MTBS_shp@data[i], as.character)
+MTBS_shp$Acres <- as.integer(MTBS_shp$Acres) 
+MTBS_shp <- subset(MTBS_shp, Acres > 1000)
+
+# Overlap polygon data sets
+cntfires <- over(sp.polys, MTBS_shp, returnList = TRUE)
+class(cntfires)
+myvec <- rbindlist(cntfires, use.names=TRUE, fill=TRUE, idcol="idin")
+setorder(myvec, idin)
+myvec[ , `:=`( COUNT = .N , IDX = 1:.N ), by = idin ]
+
+# Get first and last
+myvec <- myvec[, if (.N==1) .SD else .SD[c(1,.N)], by = idin ]
+cntycount <- myvec[, tail(.SD, 1), by = 'idin']
+cntycount.df <- setDF(cntycount)
+class(cntycount)
+sp.polys@data <- merge(sp.polys@data, cntycount.df, by.x='idin', by.y='idin' , all.x=TRUE)
+#plot(sp.polys)
+
+maxcnt <- max(myvec[,COUNT])
+myvec[, .SD[order(COUNT, increasing = TRUE) == 1]]
+myvec[, .I[which.max(COUNT)]]
+myvec[2016,]
+
+# Prepare subset of counties
+sp.polys@data$id <- rownames(sp.polys@data)
+sp.polys.fort <- fortify(sp.polys, region='id')
+sp.polys.fort.df <- merge(sp.polys.fort, sp.polys@data, by = 'id')
+
+ggplot() +
+  geom_polygon(data = sp.polys.fort.df, aes(long, lat, group = group, fill=COUNT),color = 'grey', size = 0.2) +
+  #geom_polygon(data = Pyrms_shp.slct.fort, aes(long, lat, group = group, fill='Red'),color = 'black', size = 0.2) +
+  coord_map('conic', lat0 = 30, xlim = c(-121, -72), ylim = c(25, 50)) +
+  #geom_sf(data = labels) + coord_sf(crs=st_crs(4326)) +
+  #geom_text_repel(data = pyrlabels, aes(x = x, y = y, label = PYROME), 
+  #                fontface = 'bold', colour='white', nudge_x = 0, nudge_y = 0) +
+  guides(fill=FALSE)
+
+ggplot() +
+  geom_polygon(data = sp.polys.fort.df, aes(long, lat, group = group, fill=COUNT),color = NA, size = 0.2) +
+  #geom_polygon(data = Pyrms_shp.slct.fort, aes(long, lat, group = group, fill='Red'),color = 'black', size = 0.2) +
+  coord_map('conic', lat0 = 30, xlim = c(-121, -72), ylim = c(25, 50)) +
+  geom_polygon()  +
+  geom_path(color = NA) +
+  scale_fill_gradient(breaks=c(0,50,100,150,200)) 
 
 # Time series, number of fires by diffreent causes
 # 1 Lightning; 2 Equipment Use; 3 Smoking; 4 Campfire; 5 Debris Burning; 6 Railroad; 7 Arson; 8 Children; 
@@ -334,7 +426,7 @@ points(fpafod.lt$latitude ~ fpafod.lt$longitude, pch=16, cex=0.3, col="red")
 # NY and adjacent regions
 # New York stands out, especially Long Is.:
 plot(0,0, ylim=c(40,55), xlim=c(-100,-60), type="n",
-       xlab="longitude", ylab="latitude", main="All Lightning Fires")
+     xlab="longitude", ylab="latitude", main="All Lightning Fires")
 map(c("world"), add=TRUE, lwd=2, col="gray")
 map(c("state"), add=TRUE, lwd=2, col="gray")
 points(cnfdb.lt$latitude ~ cnfdb.lt$longitude, pch=16, cex=0.3, col="red")

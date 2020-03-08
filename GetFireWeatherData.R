@@ -1,5 +1,5 @@
 ##################################################################################################################
-## Project: Evaluate ERC Time series analysis, as M. Finneys original paper
+## Project: Climate conditioning ERC stream input to fire simualator FSIM
 ##
 ## Script purpose: Process weather inputs to carry out trend analysis
 ##
@@ -29,7 +29,9 @@ library(gdalUtils)
 library(SDMTools)
 library(truncnorm)
 library(ggplot2)
+library(rgdal)
 library(raster) 
+library(rgeos)
 library(data.table)
 
 # Projection string for meter projection US wide
@@ -62,9 +64,11 @@ memory.size(max=5.0e+09)
 ##################################################################################################################
 
 # Get the data directory from readtext
-ROOT_DATA_DIR <- ('C:/ERCTimeSeriesAnalysis')
+ROOT_DATA_DIR <- ('D:/ERCTimeSeriesAnalysis')
 DATA_DIR <- ('Data') 
 OUTPUT_DIR <- ('Output') 
+DATA_YR <- 1819
+DATA_YR_OUT <- 2019
 
 # specify working directory; you will need to change this line if run elsewhere
 setwd(ROOT_DATA_DIR)
@@ -73,6 +77,9 @@ setwd(ROOT_DATA_DIR)
 getwd()
 wd <- getwd()
 print(paste0('Current working dir: ', wd))
+
+# Temporary raster location
+raster::rasterOptions(tmpdir = wd)
 
 ##################################################################################################################
 ## Section: Read Californian RAWS station list and USFS Pyrome boundary file
@@ -87,7 +94,9 @@ print(paste0('Current working dir: ', wd))
 # Read Pyrome shapefile
 Pyrms_shp <- readOGR(paste0(initial_path,'/','Pyrome_20150605.shp')) 
 Pyrms_shp <- spTransform(Pyrms_shp, CRS('+proj=longlat +ellps=WGS84 +datum=WGS84'))
+#writeOGR(Pyrms_shp, initial_path, 'PYROME_LL', driver="ESRI Shapefile")
 str(Pyrms_shp@data)
+plot(Pyrms_shp)
 
 # Pyrome of interest
 Pyrms.AOI <- Pyrms_shp[Pyrms_shp@data$PYROME == 26,]
@@ -203,6 +212,480 @@ spdf2 <- SpatialPointsDataFrame(coords = coords,
 plot(spdf2, col = 'Blue', add = TRUE)
 
 ##################################################################################################################
+## Section: Loop through Pyromes acquire station data and write Station locations to data.table
+##################################################################################################################
+
+# Read Improved station list 
+stationlistfile <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files_StationList_2019.rds')
+stationlistfile.dt <- readRDS(stationlistfile)
+stationlistfile.dt[, FILEPRESNCE := 1]
+stationlistfile.dt <- stationlistfile.dt[LONGITUDE != 0][LATITUDE != 0]
+
+# Initialize data.table to hold data for all ptroimes and closest 5 stations
+stationlistfile.dt.rnkd.master <- data.table(NULL)
+
+# Check station file exists
+for (i in 1:nrow(stationlistfile.dt)) { 
+  state <-  stationlistfile.dt[i, STATENAME] 
+  filename <- stationlistfile.dt[i, FLNAME] 
+  filenametest <- substring(filename, 10, 15)
+  stationid <- stationlistfile.dt[i, STATID] 
+  if (stationid != filenametest) {
+    stationid = filenametest
+    cat('Update name ',i, '\n')
+    stationlistfile.dt[i, STATID := stationid] 
+  }
+  statredindx <- stationlistfile.dt[ , STATINDEX] 
+  filename <- paste0('wx',stationid,'.fw13')
+  filetochck<- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files-',DATA_YR,'/',state,'/',filename) 
+  
+  # Check file exists, if not remove record
+  if(!file.exists(filetochck)) {
+    stationlistfile.dt[i, FILEPRESNCE := 0]
+    cat('File not present! ',i, '\n')
+  } 
+}
+stationlistfile.dt <- stationlistfile.dt[FILEPRESNCE == 1]
+
+# Prepare corrected data for output
+stationlistfile.rds <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files_StationList_',DATA_YR_OUT,'_CORCTD.rds')
+stationlistfile.csv <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files_StationList_',DATA_YR_OUT,'_CORCTD.csv')
+saveRDS(stationlistfile.dt, stationlistfile.rds)
+fwrite(stationlistfile.dt, stationlistfile.csv)
+
+# Loop through PYrome region polygons
+for (i in 1:nrow(Pyrms_shp)) { 
+  # Create/check output directory
+  PYRRegin <- Pyrms_shp[i,'PYROME']
+  PYRRegincode <- unlist(Pyrms_shp@data[i, 'PYROME'])
+  PyromesfOLDER <- paste0('Pyromes_2019','/','StationWeatherData','/',sprintf("%03d", PYRRegincode))
+  output_dir_PYR <- file.path(ROOT_DATA_DIR, DATA_DIR, PyromesfOLDER)
+  
+  if (!dir.exists(output_dir_PYR)){
+    dir.create(output_dir_PYR)
+  } else {
+    print("Dir already exists!")
+  }
+  
+  setwd(output_dir_PYR)
+  WD <- getwd()
+  if (!is.null(WD)) setwd(WD) 
+  print(PYRRegincode)
+
+  # Write pyrome shape out
+  writeOGR(obj=PYRRegin, dsn=output_dir_PYR, layer=paste0('Pyrome_',sprintf("%03d", PYRRegincode)), driver="ESRI Shapefile", overwrite=TRUE) 
+  
+  # Get centroid of Pyrome
+  centroid.AOI <- gCentroid(PYRRegin,byid=TRUE)
+  
+  # Find closest 4 stations
+  long_orig <- coordinates(centroid.AOI)[1]
+  lat_orig <- coordinates(centroid.AOI)[2]
+  stationlistfile.dt[, dist := dt.haversine(lat_orig, long_orig, LATITUDE, LONGITUDE)/1000.0] # convert to km
+  stationlistfile.dt[, distrank:=rank(dist,ties.method="first")]
+  colVar <- 'distrank'
+  setorderv(stationlistfile.dt, colVar)[]
+  
+  plot(PYRRegin)
+  points(centroid.AOI,pch=2, col = "Red")
+  # Select the top 5
+  stationlistfile.dt.rnkd <- stationlistfile.dt[distrank < 6]
+  stationlistfile.dt.rnkd <- stationlistfile.dt.rnkd[,PYROME := sprintf("%03d", PYRRegincode)]
+  
+  # prepare the 3 components: coordinates, data, and proj4string
+  coords <- stationlistfile.dt.rnkd[ , c('LONGITUDE', 'LATITUDE')]   # coordinates
+  data   <- stationlistfile.dt.rnkd[ , 8:11]          # data
+  crs    <- CRS("+init=epsg:4326") # proj4string of coords
+  
+  # make the spatial points data frame object
+  spdf <- SpatialPointsDataFrame(coords = coords,
+                                 data = data, 
+                                 proj4string = crs)
+  plot(spdf, col = 'Green', add = TRUE)
+  
+  # Write top 5 stations
+  filesappend <- list(stationlistfile.dt.rnkd.master, stationlistfile.dt.rnkd) 
+  #setattr(filesappend, 'names', c('1', '2', '3'))
+  stationlistfile.dt.rnkd.master <- rbindlist(filesappend, use.names=TRUE, fill=TRUE)  
+  stationlistfile.rds <- paste0(output_dir_PYR,'/','Top5CloseStations_2019.rds')
+  stationlistfile.csv <- paste0(output_dir_PYR,'/','Top5CloseStations_2019.csv')
+  saveRDS(stationlistfile.dt.rnkd, stationlistfile.rds)
+  fwrite(stationlistfile.dt.rnkd, stationlistfile.csv)
+  
+  # Check if data directory exists
+  if (dir.exists(output_dir_PYR)) {
+    # Copy station files
+    for (j in 1:5) { 
+    state <-  stationlistfile.dt.rnkd[distrank == j, STATENAME] 
+    filename <- stationlistfile.dt.rnkd[distrank == j, FLNAME] 
+    stationid <- stationlistfile.dt.rnkd[distrank == j, STATID] 
+    statredindx <- stationlistfile.dt.rnkd[distrank == j, STATINDEX] 
+    filetocopyDels <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files-',DATA_YR,'/',state,'/',filename) 
+    fileindx <- sprintf("%03d", j)
+    filename <- paste0('wx',stationid,'.fw13')
+    filetocopyWthr <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/','FAM.NWCG.GOVFAM-files-',DATA_YR,'/',state,'/',filename) 
+    filetorenme <- paste0(output_dir_PYR,'/',paste0(fileindx,'_wx',stationid,'.fw13'))     
+      if (isTRUE(dir.exists(output_dir_PYR))) {
+        file.copy(filetocopyDels, output_dir_PYR)
+        file.copy(filetocopyWthr, output_dir_PYR)  
+        file.rename(from = filename, to = paste0(fileindx,'_',filename))
+        if(!file.exists(paste0(fileindx,'_',filename))) {
+          stationlistfile.dt.rnkd.master <- stationlistfile.dt.rnkd.master[STATINDEX  == statredindx, PYROME := '999'] 
+          print('File not present!')
+        }
+      } else {
+        print('Dir already exists!')
+      }  
+    }
+  } # Check if data directory exists
+}
+
+# Write concatenated data.table of all pyromes and closest stations
+stationlistfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top5CloseStationsAllPyromes_',DATA_YR_OUT,'.rds')
+saveRDS(stationlistfile.dt.rnkd.master, stationlistfile)
+stationlistfile.dt.rnkd.master[PYROME == '999']
+
+##################################################################################################################
+## Section: Loop through Pyromes acquire gridded NARR data and write grid pointa to data.table
+##################################################################################################################
+
+# Grid point attributes read earlier
+gridattribs.dt <- WFgrds_shp.DT
+
+# Initialize data.table to hold data for all pyromes and closest 5 stations
+gridattribs.dt.rnkd.master <- data.table(NULL)
+
+# Load selenium to control chrom efor file downloads
+require(RSelenium)
+library(RSelenium)
+library(pingr)
+
+# Start server and base website 4444:4450
+sapply(9515:9515, function(p) setNames(list(pingr::ping_port('localhost', p)), p))
+available.versions <- binman::list_versions('chromedriver') 
+latest.version <- available.versions$win32[length(available.versions)][[1]][1]
+#latest.version <- '79.0.3945.36'
+rD <- rsDriver(port = 9515L, browser=c('chrome'),version = 'latest', chromever=latest.version)
+remDr <- rD[['client']]
+
+remDr$navigate('https://wrcc.dri.edu/fpa/gridded/?form_lat=&form_lon=')
+
+# Loop through PYrome region polygons
+for (i in 1:nrow(Pyrms_shp)) {
+  # Create/check output directory
+  PYRRegin <- Pyrms_shp[i,'PYROME']
+  PYRRegincode <- unlist(Pyrms_shp@data[i, 'PYROME'])
+  PyromesfOLDER <- paste0('Pyromes','/','GriddedWeatherData','/',sprintf("%03d", PYRRegincode))
+  output_dir_PYR <- file.path(ROOT_DATA_DIR, DATA_DIR, PyromesfOLDER)
+  
+  if (!dir.exists(output_dir_PYR)){
+    dir.create(output_dir_PYR)
+  } else {
+    print("Dir already exists!")
+  }
+  
+  setwd(output_dir_PYR)
+  WD <- getwd()
+  if (!is.null(WD)) setwd(WD) 
+  print(PYRRegincode)
+  
+  # Write pyrome shape out
+  writeOGR(obj=PYRRegin, dsn=output_dir_PYR, layer=paste0('Pyrome_',sprintf("%03d", PYRRegincode)), driver="ESRI Shapefile", overwrite=TRUE) 
+  
+  # Get centroid of Pyrome
+  centroid.AOI <- gCentroid(PYRRegin,byid=TRUE)
+  
+  # Find closest 4 grid points
+  long_orig <- coordinates(centroid.AOI)[1]
+  lat_orig <- coordinates(centroid.AOI)[2]
+  gridattribs.dt[, dist := dt.haversine(lat_orig, long_orig, latitude, longitude)/1000.0] # convert to km
+  gridattribs.dt[, distrank:=rank(dist,ties.method="first")]
+  colVar <- 'distrank'
+  setorderv(gridattribs.dt, colVar)[]
+  
+  plot(PYRRegin)
+  points(centroid.AOI,pch=2, col = "Red")
+  # Select the top 5
+  gridattribs.dt.rnkd <- gridattribs.dt[distrank < 5]
+  gridattribs.dt.rnkd <- gridattribs.dt.rnkd[,PYROME := sprintf("%03d", PYRRegincode)]
+  
+  # prepare the 3 components: coordinates, data, and proj4string
+  coords <- gridattribs.dt.rnkd[ , c('longitude', 'latitude')]   # coordinates
+  data   <- gridattribs.dt.rnkd[ , 3:8]          # data
+  crs    <- CRS("+init=epsg:4326") # proj4string of coords
+  
+  # make the spatial points data frame object
+  spdf <- SpatialPointsDataFrame(coords = coords,
+                                 data = data, 
+                                 proj4string = crs)
+  plot(spdf, col = 'Green', add = TRUE)
+  
+  # Write top 4 grid locations
+  filesappend <- list(gridattribs.dt.rnkd.master, gridattribs.dt.rnkd) 
+  gridattribs.dt.rnkd.master <- rbindlist(filesappend, use.names=TRUE, fill=TRUE)  
+  gridfile.rds <- paste0(output_dir_PYR,'/','Top5CloseGridPoints_2019.rds')
+  gridfile.csv <- paste0(output_dir_PYR,'/','Top5CloseGridPoints_2019.csv')
+  saveRDS(gridattribs.dt.rnkd, gridfile.rds)
+  fwrite(gridattribs.dt.rnkd, gridfile.csv)
+  
+  # Check if data directory exists
+  if (dir.exists(output_dir_PYR)) {
+    # Set working directory
+    setwd(output_dir_PYR)
+    WD <- getwd()
+    if (!is.null(WD)) setwd(WD) 
+    print(PYRRegincode)
+    
+    # Cdownload grid files
+    for (j in 1:4) { 
+      # Get grid x and y count to enter for download
+      grid_x <- as.character(gridattribs.dt.rnkd[distrank == j, grid_x]) 
+      grid_y <- as.character(gridattribs.dt.rnkd[distrank == j, grid_y]) 
+      
+      wxbutton <-remDr$findElement(using = 'xpath','//*[(@id = "id_x_field")]')
+      wxbutton$clearElement()
+      wxbutton$sendKeysToElement(list(grid_x))
+      wxbutton$clickElement()
+      
+      wxbutton <-remDr$findElement(using = 'xpath','//*[(@id = "id_y_field")]')
+      wxbutton$clearElement()
+      wxbutton$sendKeysToElement(list(grid_y,key = "enter"))
+      wxbutton$clickElement()
+      Sys.sleep(10)         
+      
+      # Files to copy and rename
+      fileindx <- sprintf("%03d", j)
+      grid_x_in <- sprintf("%03d", as.integer(grid_x))
+      grid_y_in <- sprintf("%03d", as.integer(grid_y))
+      filenamein <- paste0(grid_x_in,grid_y_in,'_gridded.fwx')
+      filenameout <- paste0(fileindx,'_',grid_x_in,grid_y_in,'_gridded.fwx')
+      filetocopyWthr <- paste0('C:/Users/joe66/downloads','/',filenamein) 
+      if (isTRUE(dir.exists(output_dir_PYR))) {
+        file.copy(filetocopyWthr, output_dir_PYR)
+        file.rename(from = filenamein, to = filenameout)  
+
+      } else {
+        print('Dir already exists!')
+      }  
+    }
+  } # Check if data directory exists 
+}
+
+# stop the selenium server
+rD[['server']]$stop()
+remDr$close()
+rm(rD)
+# If user forgets to stop server it will be garbage collected.
+#gc()
+
+# Write concatenated data.table of all pyromes and closest stations
+gridfile.rds <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top4CloseGridPointsAllPyromes.rds')
+saveRDS(gridattribs.dt.rnkd.master, gridfile.rds)
+
+##################################################################################################################
+## Section: Loop through Pyromes acquire closest station to grid points
+##################################################################################################################
+
+# Read grid point list of all pyromes 
+gridfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top4CloseGridPointsAllPyromes.rds')
+WFgrds_shp.DT <- readRDS(gridfile)
+WFgrds_shp.DT[, grid_x := sprintf("%03d", as.numeric(as.character(grid_x)))]
+WFgrds_shp.DT[, grid_y := sprintf("%03d", as.numeric(as.character(grid_y)))]
+WFgrds_shp.DT[, GRIDID := paste0(grid_x,grid_y)]
+
+# Read station list of all pyromes 
+stationlistfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top5CloseStationsAllPyromes_2019.rds')
+stationlistfile.dt <- readRDS(stationlistfile)
+
+# Extract data variables from station list
+stationlistfile.dt.in <- stationlistfile.dt[LONGITUDE < 0.0]
+stationlistfile.dt.in <- stationlistfile.dt.in[!is.na(LATITUDE)]
+seltvar <- c('STATID','LONGITUDE','LATITUDE')
+stationlistfile.dt.in <- stationlistfile.dt.in[, ..seltvar]
+sapply(stationlistfile.dt.in, class)
+
+colVar <- 'LATITUDE'
+setorderv(stationlistfile.dt, colVar)[]
+
+# Extract data variables from grid point list
+seltvar <- c('GRIDID','longitude','latitude')
+WFgrds_shp.DT.in <- WFgrds_shp.DT[, ..seltvar]
+sapply(WFgrds_shp.DT.in, class)
+
+WFgrds_shp.DT.in <- WFgrds_shp.DT.in[rep(seq(1, nrow(WFgrds_shp.DT.in)), nrow(stationlistfile.dt))]
+colVar <- 'GRIDID'
+setorderv(WFgrds_shp.DT.in, colVar)[]
+stationlistfile.dt.in <- stationlistfile.dt.in[rep(seq(1, nrow(stationlistfile.dt.in)), nrow(WFgrds_shp.DT))]
+
+# create Origin-destination matrix
+orig <- WFgrds_shp.DT.in[]
+dest <- stationlistfile.dt.in[]
+odmatrix <- bind_cols(orig,dest)
+colnames(odmatrix) <- c('GRIDID', 'long_orig', 'lat_orig', 'STATID', 'long_dest', 'lat_dest')
+odmatrix[, dist := dt.haversine(lat_orig, long_orig, lat_dest, long_dest)/1000.0]
+
+#odmatrix <- odmatrix[origi_id == '068199']
+odmatrix.frst <- setorder(odmatrix, GRIDID, dist)[, indx := seq_len(.N), by = GRIDID][indx <= 1]
+seltvar <- c('GRIDID', 'STATID')
+odmatrix.frst <- odmatrix.frst[, ..seltvar]
+
+# Append closest station to grid data
+setkey(WFgrds_shp.DT,'GRIDID')
+setkey(odmatrix.frst,'GRIDID')
+WFgrds_shp.DT <- WFgrds_shp.DT[odmatrix.frst, allow=TRUE]
+colVar <- c('PYROME', 'distrank')
+setorderv(WFgrds_shp.DT, colVar)[]
+sapply(WFgrds_shp.DT, class)
+
+# Write concatenated data.table of all pyromes and closest grid locales
+gridfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top4CloseGridPointsAllPyromes.rds')
+saveRDS(WFgrds_shp.DT, gridfile)
+
+##################################################################################################################
+## Section: Calculate and append elevation attributes to grid locations
+##################################################################################################################
+
+# Read grid point list of all pyromes 
+gridfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top4CloseGridPointsAllPyromes.rds')
+WFgrds_shp.DT <- readRDS(gridfile) 
+WFgrds_shp.DT.DF <- as.data.frame(WFgrds_shp.DT)
+
+# Read 1km Elevation raster covering North America, data in meters
+DEMProj <- '+proj=laea +lat_0=-100 +lon_0=6370997 +x_0=45 +y_0=0 +datum=WGS84 +units=m +no_defs'
+laea_proj4 <- "+proj=laea +lat_0=45 +lon_0=-100 +x_0=0 +y_0=0 +ellps=WGS84 +units=m +no_defs"
+DEMProj <- laea_proj4
+filename <- paste0(ROOT_DATA_DIR,'/',DATA_DIR,'/Elevation_GRID/','USIKMElev.tif')
+elevdat <- raster::raster(filename)
+plot(elevdat) 
+
+# Correct elevation data for extreme value coding
+correlev <- function(x) {
+  z <- ifelse(x >= 32768, x - 65536 , x)
+}
+elevdat.CORR <- calc(elevdat, fun=correlev)
+crs(elevdat.CORR) <- DEMProj
+plot(elevdat.CORR)
+
+# Create derivatives - slope terrain(x, opt=c('slope'), unit='degrees', neighbors=8)
+slope_perc <- terrain(elevdat.CORR, 'slope', neighbors=8)
+plot(slope_perc)
+slope_perc <- round(slope_perc * 100.0, 2) 
+title("1KM DEM or Derivatives")
+
+# Reclassify slope percentages
+m <- c(-0.1, 25.999, 1, 25.999, 40.999, 2, 40.999, 55.999, 3, 55.999, 75.999, 4, 75.999, 100, 5)
+rclmat <- matrix(m, ncol=3, byrow=TRUE)
+slope_perc.rc <- reclassify(slope_perc, rclmat)
+plot(slope_perc.rc)
+
+# Save reprojected raster
+#if (require(rgdal)) {
+#  rf <- writeRaster(landform, filename=paste0('C:/ERCTimeSeriesAnalysis/Data/landform1.tif'), 
+#                   format='GTiff', overwrite=TRUE)
+#}
+
+# Create derivatives - aspect
+aspect <- terrain(elevdat.CORR, "aspect", unit='degrees', neighbors=8)
+plot(aspect) 
+title("1KM DEM or Derivatives")
+
+# Reclassify aspect percentages
+m <- c(0, 1, 0, 1, 45, 1, 45, 90, 2, 90, 135, 3, 135, 180, 4, 
+          180, 225, 5, 225, 270, 6, 270, 315, 7, 315, 360, 8)
+rclmat <- matrix(m, ncol=3, byrow=TRUE)
+aspect.rc <- reclassify(aspect, rclmat)
+plot(aspect.rc)
+
+# Write grid locations shape out
+#writeOGR(obj=WFgrds.spdf.trnsfrmd, dsn='C:/ERCTimeSeriesAnalysis/Data', 
+#         layer='gridlocations', driver="ESRI Shapefile", overwrite=TRUE) 
+
+# TPI for different neighborhood size:
+# first step: define customized function
+tpiw <- function(x, w=5) {
+  m <- matrix(1/(w^2-1), nc=w, nr=w)
+  m[ceiling(0.5 * length(m))] <- 0
+  f <- focal(x, m) 
+  x - f
+}
+# second step: apply the function
+tpi5 <- tpiw(elevdat.CORR, w=5)
+tpi5n <- setMinMax(tpi5)
+col <- rainbow(20)
+plot(tpi5n, col=col, main="Topographic Position Index in Death Valley")
+quantile(tpi5[],na.rm=T)
+hist(tpi5[])
+
+# Get the standard deviation of the TPI
+SD <- sd(tpi5[],na.rm=T)
+
+# Make landform classes
+#Morphologic class De Reu et al. 2013;  Weiss (2001)
+landform <- reclassify(tpi5, matrix(c(-Inf, -SD, 1,
+                                      -SD, -SD/2, 2,
+                                      -SD/2, 0, 3,
+                                      0, SD/2, 4,
+                                      SD/2, SD, 5,
+                                      SD, Inf, 6),
+                                    ncol = 3, byrow = T),
+                       right = T)
+
+# Turn it into categorical raster
+landform <- as.factor(landform) 
+rat <- levels(landform)[[1]]
+#rat[["landform"]] <- c('Valley', 'Lower Slope', 
+#                       'Flat Area','Middle Slope', 
+#                       'Upper Slope', 'Ridge')
+
+rat[["landform"]] <- c('Valley bottom or flat ', 'Valley bottom or flat ', 
+                       'Valley bottom or flat ', 'Valley bottom or flat ', 
+                       'Mid-slope', 'Ridge or peak')
+levels(landform) <- rat 
+# Plot the classification
+x11(12,12)
+
+levelplot(landform, col.regions = rev(brewer.pal(6,'RdYlBu')),
+          labels = rat$landform,
+          main = "Landform Classification",
+          colorkey=list(labels=list(at=1:6, labels=rat[["landform"]])))
+
+# Create spatial points data frame from grid point locations data.table
+options(stringsAsFactors=FALSE)
+coords <- WFgrds_shp.DT.DF[ , c('longitude', 'latitude')] # coordinates
+data   <- WFgrds_shp.DT.DF[ , 8:10] # data
+crs    <- CRS("+init=epsg:4326") # proj4string of coords
+
+# make the spatial points data frame object
+WFgrds.spdf <- SpatialPointsDataFrame(coords = coords,
+                                      data = data, 
+                                      proj4string = crs)
+
+# Project data points to DEM projection
+WFgrds.spdf.trnsfrmd <- spTransform(WFgrds.spdf,DEMProj)
+#plot(WFgrds.spdf.trnsfrmd, col = 'Blue',  add = TRUE, cex=0.5)
+summary(WFgrds.spdf.trnsfrmd)
+compareCRS(crs(WFgrds.spdf.trnsfrmd), crs(elevdat.CORR))
+
+# Extract raster attributes
+WFgrds.spdf.trnsfrmd.elv <- extract(elevdat.CORR, WFgrds.spdf.trnsfrmd)
+WFgrds.spdf.trnsfrmd.elv[ is.na(WFgrds.spdf.trnsfrmd.elv) ] <- 0
+WFgrds.spdf.trnsfrmd.elv <- as.integer(WFgrds.spdf.trnsfrmd.elv * 3.2808399) # Convert to feet
+WFgrds.spdf.trnsfrmd.slp <- extract(slope_perc.rc, WFgrds.spdf.trnsfrmd)
+WFgrds.spdf.trnsfrmd.slp[ is.na(WFgrds.spdf.trnsfrmd.slp) ] <- 1
+WFgrds.spdf.trnsfrmd.apt <- extract(aspect.rc, WFgrds.spdf.trnsfrmd)
+WFgrds.spdf.trnsfrmd.apt[ is.na(WFgrds.spdf.trnsfrmd.apt) ] <- 0
+WFgrds.spdf.trnsfrmd.ldf <- extract(landform, WFgrds.spdf.trnsfrmd)
+WFgrds.spdf.trnsfrmd.ldf[ is.na(WFgrds.spdf.trnsfrmd.ldf) ] <- 1
+results.df <- cbind.data.frame(WFgrds.spdf.trnsfrmd.elv,WFgrds.spdf.trnsfrmd.slp,WFgrds.spdf.trnsfrmd.apt,WFgrds.spdf.trnsfrmd.ldf)
+colnames(results.df) <- c('ELEVTN_ft', 'SLOPECLS', 'ASPCTCLS', 'SITE')
+results.df <- cbind.data.frame(WFgrds_shp.DT.DF,results.df)
+WFgrds_shp.DT.OUT <- setDT(results.df)
+
+# Write concatenated data.table of all pyromes and closest stations
+gridfile <- paste0('D:/ERCTimeSeriesAnalysis/Data/Pyromes_2019/','Top4CloseGridPointsAllPyromesCWAtrbs.rds')
+saveRDS(WFgrds_shp.DT.OUT, gridfile)
+
+##################################################################################################################
 # Use the following sites to download station data. Fisrt site is most complete
 ## https://fam.nwcg.gov/fam-web/weatherfirecd/state_data.htm #
 ## https://cefa.dri.edu/raws/index.php
@@ -221,7 +704,7 @@ flush.console()
 
 ##################################################################################################################
 ##                                                                                                              ##
-##            Program end section to create tested accumulated Precipitation output for hurricane event         ##
+##            Program end section to Process weather inputs to carry out trend analysis                         ##
 ##                                                                                                              ##
 ##################################################################################################################
 
