@@ -986,16 +986,20 @@ for (ipyr in pyromes) {
 ## Section: Analyze differences between averaged station and NARR gridded data
 ##################################################################################################################
 
+# Total number of pyromes
+numpyr <- 128
+pyromes <- seq(1,numpyr,1)
+
 # Select subset of pyromes
-#pyrssub <- sprintf('%03d',seq(1:128))
+pyrssub <- sprintf('%03d',pyromes)
 
 #pyrssub <- c('001','005', '008', '009', '010', '011', '012', '013', '014', 
 #             '015', '020', '026', '075', '101', '118', '122', '127')
 
-pyrssub <- c('001')
+#pyrssub <- c('008')
 
 # Loop through pyromes 
-for (ipyr in pyromes) { ipyr <- 1
+for (ipyr in 30:length(pyromes)) { ipyr <- 29
   # Evaluate pyrome code
   PYROMEIN <- sprintf("%03d", as.integer(pyromes[ipyr]))
   idx_one_in_two <- match(PYROMEIN, unlist(pyrssub))
@@ -1006,51 +1010,60 @@ for (ipyr in pyromes) { ipyr <- 1
     NARRFilnm <- paste0('AvgdCombdNARRGridDat_',PYROMEIN,'.rds')
     NARRFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/',NARRFilnm)) 
     griddeddata.DT <- readRDS(NARRFullFile) 
-    setorder(griddeddata.DT, -RAIN)
+    #setorder(griddeddata.DT, -RAIN)
 
     # Station Averaged data for current pyrome  
     StatFilnm <- paste0('AvgdCombdStatDat_',PYROMEIN,'.rds')    
     StatFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/',StatFilnm))
     stationdata.DT <- readRDS(StatFullFile)
-    setorder(stationdata.DT, -RAIN)
+    #setorder(stationdata.DT, -RAIN)
     
+    # Append data.tables into 1 
+    filesappend <- list(griddeddata.DT, stationdata.DT) 
+    setattr(filesappend, 'names', c('NARR_Data', 'Station_Data'))
+    cmbwthrdat.DT <- rbindlist(filesappend, use.names=TRUE, fill=TRUE, idcol='WTHRDATATYPE')    
     
-    
+    # Plot each weather variable
+    collength <- dim(cmbwthrdat.DT)[2]
+    namesin <- names(cmbwthrdat.DT)[3:collength] 
+    for (i in 1:length(namesin)) { 
+      # Select weather variable for plotting
+      x <- namesin[i] 
+      
+      # Set plot legend title and export image name
+      legend_title <- 'Climate Type'
+      imageO_title <- paste0('Pyrome_',PYROMEIN,'_',x,'.png')
+      
+      # Initialize ggplot 
+      theme_set(
+        theme_minimal() +
+        theme(legend.position = "right") 
+      )
+      
+      # Create output directory if required
+      outputDIR <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/Plots/',x))
+      if (!dir.exists(outputDIR)) {dir.create(outputDIR)}
+      setwd(outputDIR)
+
+      # Plot current variable 
+      the_plot <- ggplot(cmbwthrdat.DT, aes(x = DATE, y = !!ensym(x), col = WTHRDATATYPE)) + 
+        geom_line() + theme(legend.position = "none") +
+        facet_wrap(~ WTHRDATATYPE, scales = 'free_y', ncol = 1)
+      
+      # Image export details
+      png(width=1000, height=500)
+      print(the_plot)
+      dev.off()
+      ggsave(imageO_title, the_plot, width = 9, height = 9)      
+
+      #unlink(paste0(title,'.png))
+      rm(the_plot,imageO_title)
+    } # Plot each weather variable
+ 
   } # Select pyromes
 } # All pyromes 
 
 
-# Select files to process
-filedir <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome'))
-setwd(filedir)
-wd <- getwd()
-print(paste0('Current working dir: ', wd))  
-
-# Select files to process
-pattern <- c('AvgdCombdStatDat')
-filesin <- list.files(pattern=paste0(pattern, collapse="|"),recursive = TRUE, full.names = TRUE)  
-filenamesin <- basename(filesin)
-rdsfilesin <- include(filenamesin,'.rds')
-rdsfilesin <- rdsfilesin[order(as.integer(substring(rdsfilesin, 5, 8)),  decreasing = TRUE, rdsfilesin)]
-rdsfilesin.srtd <- rdsfilesin[!duplicated(as.integer(substring(rdsfilesin, 5, 8)))]
-if (length(rdsfilesin.srtd) >= 4) {
-  rdsfilesin <- rdsfilesin.srtd[-c(4:length(rdsfilesin.srtd))]
-} else {
-  rdsfilesin <- rdsfilesin.srtd   
-}
-
-
-
-
-# Plot ggplot 
-legend_title <- 'Climate Type'
-p <- ggplot(stationdata.DT.plt.DF, aes(x = DATE, y = RAIN)) + 
-  geom_line() + 
-  facet_wrap(~ STATNUM, scales = 'free_y', ncol = 1)
-png(width=1000, height=500)
-print(p)
-dev.off()
-ggsave(paste0('Pyrome_',PYROMEIN,'_all.png'), p, width = 9, height = 9)
 
 ##################################################################################################################
 ## Section: Define miscellaneous functions
