@@ -260,17 +260,22 @@ for (iLine in 1:nrow(stationlistfile.dt.rnkd)) {
 }
 
 # Write concatenated data.table of all pyromes station data combined
-cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/AllPyromesOrigStatDat.rds')
+cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome03/AllPyromesOrigStatDat.rds')
 saveRDS(stationdata.DT.all.pyrs, cmbndstdatfile)
 
 # Re-read combined input data
-cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/AllPyromesOrigStatDat.rds')
+cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome03/AllPyromesOrigStatDat.rds')
 stationdata.DT.all.pyrs <- readRDS(cmbndstdatfile) 
 sapply(stationdata.DT.all.pyrs, class) 
 
 # Reset data for all pyromes 
 stationdata.DT <- copy(stationdata.DT.all.pyrs)
-#stationdata.DT <- stationdata.DT[PYROME == '001']
+#stationdata.DT <- stationdata.DT[PYROME == '008']
+sapply(stationdata.DT, class) 
+
+# Highlight blank entries separate from 0 entries - assuming all 28 fields are character
+indx <- which(sapply(stationdata.DT, is.character))
+for (j in indx) set(stationdata.DT, i = grep("^[[:space:]]*$", stationdata.DT[[j]]), j = j, value = NA_character_) 
 
 # Reformat date column
 cols <- c('DATE')
@@ -302,7 +307,7 @@ mtimes <- setNames(mtimes, convrttype)
 set_colclass(stationdata.DT,mtimes)
 
 # Convert decimal inches 00000, format nn.nnn to number
-for (j in names(stationdata.DT)) set(stationdata.DT,which(is.na(stationdata.DT[[j]])),j,0)
+#for (j in names(stationdata.DT)) set(stationdata.DT,which(is.na(stationdata.DT[[j]])),j,0)
 for(i in 4L){ set(stationdata.DT, i=NULL, j=i, value=0.001*stationdata.DT[['RAIN']]) }
 
 # Convert pyrome station data to data frame for plotting
@@ -376,7 +381,7 @@ stationdata.DT[ ,`:=`(REFTIME = NULL, DIFTIME = NULL, DAYM = NULL, INDX = NULL,
 stationdata.DT[1:10,]
 
 # Write concatenated data.table of all pyromes station data combined
-cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/AllPyromesOrigStatDat_DDUPED.rds')
+cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome03/AllPyromesOrigStatDat_DDUPED.rds')
 saveRDS(stationdata.DT, cmbndstdatfile)
 
 ##################################################################################################################
@@ -384,9 +389,38 @@ saveRDS(stationdata.DT, cmbndstdatfile)
 ##################################################################################################################
 
 # Re-read concatenated data.table of all pyromes station data combined
-cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/AllPyromesOrigStatDat_DDUPED.rds')
+cmbndstdatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome03/AllPyromesOrigStatDat_DDUPED.rds')
 stationdata.DT <- readRDS(cmbndstdatfile) 
-sapply(griddeddata.DT, class) 
+sapply(stationdata.DT, class) 
+TEST <- copy(stationdata.DT)
+
+# Fix RAIN/RnDr mismatches
+stationdata.DT[, RnDr := RnDr ][RAIN == 0, RnDr := 0]
+
+# Subtract TEST from stationdata.DT. For each STATNUM & DATE subtract RnDr from RnDr, preserving all other columns
+stationdata.DT[TEST, on=.(STATNUM,DATE), RnDrDif := x.RnDr - i.RnDr, by=.EACHI]
+stationdata.DT[RnDrDif != 0] # 3590 records altered in total
+
+# Compare results
+IDX <- stationdata.DT[ , which(RnDrDif != 0) ] # 3590 indices extracted
+TEST[stationdata.DT[IDX], on=.(STATNUM,DATE), .(STATNUM,DATE, t1 = i.RnDr, t2 = x.RnDr, t3 = i.RnDrDif)] # x implies DT TEST
+isTRUE(all.equal(TEST, stationdata.DT))
+stationdata.DT[, RnDrDif := NULL]
+
+# Convert pyrome station data to data frame for plotting
+#stationdata.DT <- stationdata.DT[PYROME == '008']
+#stationdata.DF <- copy(stationdata.DT)
+#stationdata.DF <- setDF(stationdata.DF)
+
+#ggplot() +
+  # plot all simulations
+#  geom_line(data = stationdata.DF, aes(x = DATE, y = RAIN, color = STATNUM, group=STATNUM), alpha = 1, size = 0.65) +
+#  labs(x="Date",y=expression('Precipitation Amount (inches)')) +
+#  theme(text = element_text(size=10))
+
+#ggplot(stationdata.DF, aes(x = DATE, y = TEMP)) + 
+#  geom_line() + 
+#  facet_wrap(~ STATNUM, scales = 'free_y', ncol = 1)
 
 # Total number of pyromes
 numpyr <- 128
@@ -437,11 +471,11 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
 
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.RAIN <- data_cont[, .(RAIN = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.RAIN)) set(data_cont.RAIN, which(is.nan(data_cont.RAIN[[j]])), j, 0)
-    for(i in 2L){ set(data_cont.RAIN, i=NULL, j=i, value=1*data_cont.RAIN[['RAIN']]) }
-    # Extract RAIN *********************************************************************    
+    #for (j in 1:ncol(data_cont.RAIN)) set(data_cont.RAIN, which(is.nan(data_cont.RAIN[[j]])), j, 0)
+    #for(i in 2L){ set(data_cont.RAIN, i=NULL, j=i, value=1*data_cont.RAIN[['RAIN']]) }
+    # Extract RAIN *********************************************************************
 
     # Extract RnDr ********************************************************************* 
     pattern <- c('RnDr')
@@ -450,10 +484,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.RnDr <- data_cont[, .(RnDr = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.RnDr)) set(data_cont.RnDr, which(is.nan(data_cont.RnDr[[j]])), j, 0)
-    data_cont.RnDr[, c('RnDr') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('RnDr')]
+    #for (j in 1:ncol(data_cont.RnDr)) set(data_cont.RnDr, which(is.nan(data_cont.RnDr[[j]])), j, 0)
+    #data_cont.RnDr[, c('RnDr') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('RnDr')]
     # Extract RnDr ********************************************************************* 
     
     # Extract Temp ********************************************************************* 
@@ -463,12 +497,18 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.TEMP <- data_cont[, .(TEMP = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.TEMP)) set(data_cont.TEMP, which(is.nan(data_cont.TEMP[[j]])), j, 0)
-    data_cont.TEMP[, c('TEMP') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('TEMP')]    
-    # Extract Temp *********************************************************************     
-
+    #for (j in 1:ncol(data_cont.TEMP)) set(data_cont.TEMP, which(is.nan(data_cont.TEMP[[j]])), j, 0)
+    #data_cont.TEMP[, c('TEMP') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('TEMP')]   
+    
+    # Replace extreme values greater than 3 sigma on the mean
+    mean.TEMP <- data_cont.TEMP[ , lapply(.SD, mean, na.rm=TRUE), .SDcols = !'DATE']
+    sd.TEMP <- data_cont.TEMP[ , lapply(.SD, sd, na.rm=TRUE), .SDcols = !'DATE'] 
+    TEMPExtm <- as.integer(unlist(mean.TEMP[[1]] + 3.0 * sd.TEMP[[1]]))
+    data_cont.TEMP <- data_cont.TEMP[, TEMP := TEMP ][TEMP > TEMPExtm, TEMP := as.integer(TEMPExtm)]
+    # Extract Temp *********************************************************************  
+    
     # Extract ATMOIST (Basically RH) ********************************************************************* 
     pattern <- c('ATMOIST')
     tifsperrds <- as.matrix(sapply(pattern, function(x) grepl(x, colnames(data_cont))))
@@ -476,10 +516,13 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.ATMOIST <- data_cont[, .(ATMOIST = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.ATMOIST)) set(data_cont.ATMOIST, which(is.nan(data_cont.ATMOIST[[j]])), j, 0)
-    data_cont.ATMOIST[, c('ATMOIST') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('ATMOIST')]    
+    #for (j in 1:ncol(data_cont.ATMOIST)) set(data_cont.ATMOIST, which(is.nan(data_cont.ATMOIST[[j]])), j, 0)
+    #data_cont.ATMOIST[, c('ATMOIST') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('ATMOIST')]   
+    
+    # Remove erroneous data
+    data_cont.ATMOIST <- data_cont.ATMOIST[, ATMOIST := ATMOIST ][ATMOIST > 100, ATMOIST := as.integer(100)]
     # Extract ATMOIST (Basically RH) *********************************************************************   
     
     # Extract MaxT ********************************************************************* 
@@ -489,50 +532,68 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MaxT <- data_cont[, .(MaxT = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MaxT)) set(data_cont.MaxT, which(is.nan(data_cont.MaxT[[j]])), j, 0)
-    data_cont.MaxT[, c('MaxT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MaxT')]    
+    #for (j in 1:ncol(data_cont.MaxT)) set(data_cont.MaxT, which(is.nan(data_cont.MaxT[[j]])), j, 0)
+    #data_cont.MaxT[, c('MaxT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MaxT')]  
+    
+    # Replace extreme values greater than 3 sigma on the mean
+    mean.MaxT <- data_cont.MaxT[ , lapply(.SD, mean, na.rm=TRUE), .SDcols = !'DATE']
+    sd.MaxT <- data_cont.MaxT[ , lapply(.SD, sd, na.rm=TRUE), .SDcols = !'DATE'] 
+    MaxTExtm <- as.integer(unlist(mean.MaxT[[1]] + 3.0 * sd.MaxT[[1]]))
+    data_cont.MaxT <- data_cont.MaxT[, MaxT := MaxT ][MaxT > MaxTExtm, MaxT := as.integer(MaxTExtm)]
     # Extract MaxT *********************************************************************      
     
-    # Extract MaxT ********************************************************************* 
+    # Extract MinT ********************************************************************* 
     pattern <- c('MinT')
     tifsperrds <- as.matrix(sapply(pattern, function(x) grepl(x, colnames(data_cont))))
     indxs <- which(apply(tifsperrds, 1, function(x) all(x == c(TRUE))))
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MinT <- data_cont[, .(MinT = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MinT)) set(data_cont.MinT, which(is.nan(data_cont.MinT[[j]])), j, 0)
-    data_cont.MinT[, c('MinT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MinT')]    
-    # Extract MaxT *********************************************************************      
+    #for (j in 1:ncol(data_cont.MinT)) set(data_cont.MinT, which(is.nan(data_cont.MinT[[j]])), j, 0)
+    #data_cont.MinT[, c('MinT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MinT')]  
     
-    # Extract MaxT ********************************************************************* 
+    # Replace extreme values greater than 3 sigma on the mean
+    mean.MinT <- data_cont.MinT[ , lapply(.SD, mean, na.rm=TRUE), .SDcols = !'DATE']
+    sd.MinT <- data_cont.MinT[ , lapply(.SD, sd, na.rm=TRUE), .SDcols = !'DATE'] 
+    MinTExtm <- as.integer(unlist(mean.MinT[[1]] + 3.0 * sd.MinT[[1]]))
+    data_cont.MinT <- data_cont.MinT[, MinT := MinT ][MinT > MinTExtm, MinT := as.integer(MinTExtm)]
+    # Extract MinT *********************************************************************      
+    
+    # Extract MxRH ********************************************************************* 
     pattern <- c('MxRH')
     tifsperrds <- as.matrix(sapply(pattern, function(x) grepl(x, colnames(data_cont))))
     indxs <- which(apply(tifsperrds, 1, function(x) all(x == c(TRUE))))
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MxRH <- data_cont[, .(MxRH = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MxRH)) set(data_cont.MxRH, which(is.nan(data_cont.MxRH[[j]])), j, 0)
-    data_cont.MxRH[, c('MxRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MxRH')]    
-    # Extract MaxT *********************************************************************       
+    #for (j in 1:ncol(data_cont.MxRH)) set(data_cont.MxRH, which(is.nan(data_cont.MxRH[[j]])), j, 0)
+    #data_cont.MxRH[, c('MxRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MxRH')] 
     
-    # Extract MaxT ********************************************************************* 
+    # Remove erroneous data
+    data_cont.MxRH <- data_cont.MxRH[, MxRH := MxRH ][MxRH > 100, MxRH := as.integer(100)]
+    # Extract MxRH *********************************************************************       
+    
+    # Extract MnRH ********************************************************************* 
     pattern <- c('MnRH')
     tifsperrds <- as.matrix(sapply(pattern, function(x) grepl(x, colnames(data_cont))))
     indxs <- which(apply(tifsperrds, 1, function(x) all(x == c(TRUE))))
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MnRH <- data_cont[, .(MnRH = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MnRH)) set(data_cont.MnRH, which(is.nan(data_cont.MnRH[[j]])), j, 0)
-    data_cont.MnRH[, c('MnRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MnRH')]    
-    # Extract MaxT *********************************************************************      
+    #for (j in 1:ncol(data_cont.MnRH)) set(data_cont.MnRH, which(is.nan(data_cont.MnRH[[j]])), j, 0)
+    #data_cont.MnRH[, c('MnRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MnRH')]   
+    
+    # Remove erroneous data
+    data_cont.MnRH <- data_cont.MnRH[, MnRH := MnRH ][MnRH > 100, MnRH := as.integer(100)]
+    # Extract MnRH *********************************************************************      
 
     # Merge final data
     DT_cmb <- data_cont.RAIN[data_cont.RnDr,][data_cont.TEMP,][data_cont.ATMOIST,]
@@ -540,7 +601,7 @@ for (ipyr in pyromes) {
     #setorder(data_cont.FIN, -RAIN) data_cont.RAIN
 
     # Output file with ammendments for testing
-    filedir <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome'))
+    filedir <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome04'))
     fileout <- paste0('AvgdCombdStatDat_',PYROMEIN,'.rds')
     if (!dir.exists(filedir)){
       dir.create(filedir,recursive = TRUE)
@@ -677,12 +738,12 @@ for (iLine in 1:nrow(griddeddata.DT.rnkd)) {
 }
 
 # Write concatenated data.table of all pyromes station data combined
-cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/AllPyromesOrigNARRGridDat.rds')
+cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03/AllPyromesOrigNARRGridDat.rds')
 saveRDS(griddeddata.DT.all.pyrs, cmbndgddatfile)
 #rm(griddeddata.DT.all.pyrs)
 
 # Re-read combined input data
-cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/AllPyromesOrigNARRGridDat.rds')
+cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03/AllPyromesOrigNARRGridDat.rds')
 griddeddata.DT.all.pyrs <- readRDS(cmbndgddatfile) 
 sapply(griddeddata.DT.all.pyrs, class) 
 
@@ -694,6 +755,10 @@ griddeddata.DT <- copy(griddeddata.DT.all.pyrs)
 set_colclass(griddeddata.DT, c(YEAR='numeric', RnDr='numeric', Rain='numeric'))
 class(griddeddata.DT$RnDr)
 sapply(griddeddata.DT, class)
+
+# Highlight blank entries separate from 0 entries - assuming all 25 fields are character
+indx <- which(sapply(griddeddata.DT, is.character))
+for (j in indx) set(griddeddata.DT, i = grep("^[[:space:]]*$", griddeddata.DT[[j]]), j = j, value = NA_character_) 
 
 # Reformat and creat date column
 griddeddata.DT[, D4YR := 0]
@@ -720,7 +785,7 @@ mtimes <- setNames(mtimes, convrttype)
 set_colclass(griddeddata.DT,mtimes)
 
 # Convert decimal inches 00000, format nn.nnn to number
-for (j in names(griddeddata.DT)) set(griddeddata.DT,which(is.na(griddeddata.DT[[j]])),j,0)
+#for (j in names(griddeddata.DT)) set(griddeddata.DT,which(is.na(griddeddata.DT[[j]])),j,0)
 for(i in 4L){ set(griddeddata.DT, i=NULL, j=i, value=0.01*griddeddata.DT[['Rain']]) }
 
 # Rename to be consistent with station data
@@ -799,7 +864,7 @@ griddeddata.DT[ ,`:=`(REFTIME = NULL, DIFTIME = NULL, DAYM = NULL, INDX = NULL,
 griddeddata.DT[1:10,]
 
 # Write concatenated data.table of all pyromes station data combined duplicates removed
-cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/AllPyromesOrigNARRGridDat_DDUPED.rds')
+cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03/AllPyromesOrigNARRGridDat_DDUPED.rds')
 saveRDS(griddeddata.DT, cmbndgddatfile)
 
 ##################################################################################################################
@@ -807,7 +872,7 @@ saveRDS(griddeddata.DT, cmbndgddatfile)
 ##################################################################################################################
 
 # Re-read combined input data
-cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/AllPyromesOrigNARRGridDat_DDUPED.rds')
+cmbndgddatfile <- paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03/AllPyromesOrigNARRGridDat_DDUPED.rds')
 griddeddata.DT <- readRDS(cmbndgddatfile) 
 sapply(griddeddata.DT, class) 
 
@@ -860,10 +925,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.RAIN <- data_cont[, .(RAIN = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.RAIN)) set(data_cont.RAIN, which(is.nan(data_cont.RAIN[[j]])), j, 0)
-    for(i in 2L){ set(data_cont.RAIN, i=NULL, j=i, value=1*data_cont.RAIN[['RAIN']]) }
+    #for (j in 1:ncol(data_cont.RAIN)) set(data_cont.RAIN, which(is.nan(data_cont.RAIN[[j]])), j, 0)
+    #for(i in 2L){ set(data_cont.RAIN, i=NULL, j=i, value=1*data_cont.RAIN[['RAIN']]) }
     # Extract RAIN *********************************************************************    
     
     # Extract RnDr ********************************************************************* 
@@ -873,10 +938,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.RnDr <- data_cont[, .(RnDr = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.RnDr)) set(data_cont.RnDr, which(is.nan(data_cont.RnDr[[j]])), j, 0)
-    data_cont.RnDr[, c('RnDr') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('RnDr')]
+    #for (j in 1:ncol(data_cont.RnDr)) set(data_cont.RnDr, which(is.nan(data_cont.RnDr[[j]])), j, 0)
+    #data_cont.RnDr[, c('RnDr') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('RnDr')]
     # Extract RnDr ********************************************************************* 
     
     # Extract Temp ********************************************************************* 
@@ -886,10 +951,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.TEMP <- data_cont[, .(TEMP = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.TEMP)) set(data_cont.TEMP, which(is.nan(data_cont.TEMP[[j]])), j, 0)
-    data_cont.TEMP[, c('TEMP') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('TEMP')]    
+    #for (j in 1:ncol(data_cont.TEMP)) set(data_cont.TEMP, which(is.nan(data_cont.TEMP[[j]])), j, 0)
+    #data_cont.TEMP[, c('TEMP') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('TEMP')]    
     # Extract Temp *********************************************************************     
     
     # Extract ATMOIST (Basically RH) ********************************************************************* 
@@ -899,10 +964,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.ATMOIST <- data_cont[, .(ATMOIST = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.ATMOIST)) set(data_cont.ATMOIST, which(is.nan(data_cont.ATMOIST[[j]])), j, 0)
-    data_cont.ATMOIST[, c('ATMOIST') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('ATMOIST')]    
+    #for (j in 1:ncol(data_cont.ATMOIST)) set(data_cont.ATMOIST, which(is.nan(data_cont.ATMOIST[[j]])), j, 0)
+    #data_cont.ATMOIST[, c('ATMOIST') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('ATMOIST')]    
     # Extract ATMOIST (Basically RH) *********************************************************************   
     
     # Extract MaxT ********************************************************************* 
@@ -912,10 +977,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MaxT <- data_cont[, .(MaxT = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MaxT)) set(data_cont.MaxT, which(is.nan(data_cont.MaxT[[j]])), j, 0)
-    data_cont.MaxT[, c('MaxT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MaxT')]    
+    #for (j in 1:ncol(data_cont.MaxT)) set(data_cont.MaxT, which(is.nan(data_cont.MaxT[[j]])), j, 0)
+    #data_cont.MaxT[, c('MaxT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MaxT')]    
     # Extract MaxT *********************************************************************      
     
     # Extract MaxT ********************************************************************* 
@@ -925,10 +990,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MinT <- data_cont[, .(MinT = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MinT)) set(data_cont.MinT, which(is.nan(data_cont.MinT[[j]])), j, 0)
-    data_cont.MinT[, c('MinT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MinT')]    
+    #for (j in 1:ncol(data_cont.MinT)) set(data_cont.MinT, which(is.nan(data_cont.MinT[[j]])), j, 0)
+    #data_cont.MinT[, c('MinT') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MinT')]    
     # Extract MaxT *********************************************************************      
     
     # Extract MaxT ********************************************************************* 
@@ -938,10 +1003,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MxRH <- data_cont[, .(MxRH = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MxRH)) set(data_cont.MxRH, which(is.nan(data_cont.MxRH[[j]])), j, 0)
-    data_cont.MxRH[, c('MxRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MxRH')]    
+    #for (j in 1:ncol(data_cont.MxRH)) set(data_cont.MxRH, which(is.nan(data_cont.MxRH[[j]])), j, 0)
+    #data_cont.MxRH[, c('MxRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MxRH')]    
     # Extract MaxT *********************************************************************       
     
     # Extract MaxT ********************************************************************* 
@@ -951,10 +1016,10 @@ for (ipyr in pyromes) {
     cols <- colnames(data_cont)[indxs]
     
     # Fix zero elements as NA
-    data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
+    #data_cont[, (cols) :=  lapply(.SD, function(x) ifelse(x <=0, NA, x)), .SDcols = cols]
     data_cont.MnRH <- data_cont[, .(MnRH = rowMeans(.SD, na.rm=TRUE)), .SDcols = cols, by = DATE]
-    for (j in 1:ncol(data_cont.MnRH)) set(data_cont.MnRH, which(is.nan(data_cont.MnRH[[j]])), j, 0)
-    data_cont.MnRH[, c('MnRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MnRH')]    
+    #for (j in 1:ncol(data_cont.MnRH)) set(data_cont.MnRH, which(is.nan(data_cont.MnRH[[j]])), j, 0)
+    #data_cont.MnRH[, c('MnRH') := lapply(.SD, function(x) (  round(x, 0)) ), .SDcols=c('MnRH')]    
     # Extract MaxT *********************************************************************      
     
     # Merge final data
@@ -963,7 +1028,7 @@ for (ipyr in pyromes) {
     #setorder(data_cont.FIN, -RAIN) data_cont.RAIN
     
     # Output file with ammendments for testing
-    filedir <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome'))
+    filedir <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03'))
     fileout <- paste0('AvgdCombdNARRGridDat_',PYROMEIN,'.rds')
     if (!dir.exists(filedir)){
       dir.create(filedir,recursive = TRUE)
@@ -999,7 +1064,7 @@ pyrssub <- sprintf('%03d',pyromes)
 #pyrssub <- c('008')
 
 # Loop through pyromes 
-for (ipyr in 30:length(pyromes)) { ipyr <- 29
+for (ipyr in 1:length(pyromes)) { 
   # Evaluate pyrome code
   PYROMEIN <- sprintf("%03d", as.integer(pyromes[ipyr]))
   idx_one_in_two <- match(PYROMEIN, unlist(pyrssub))
@@ -1008,40 +1073,44 @@ for (ipyr in 30:length(pyromes)) { ipyr <- 29
     
     # NARR Averaged data for current pyrome
     NARRFilnm <- paste0('AvgdCombdNARRGridDat_',PYROMEIN,'.rds')
-    NARRFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome/',NARRFilnm)) 
+    NARRFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedNARRGridDataByPyrome03/',NARRFilnm)) 
     griddeddata.DT <- readRDS(NARRFullFile) 
     #setorder(griddeddata.DT, -RAIN)
 
     # Station Averaged data for current pyrome  
     StatFilnm <- paste0('AvgdCombdStatDat_',PYROMEIN,'.rds')    
-    StatFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome/',StatFilnm))
+    StatFullFile <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/CombinedStationDataByPyrome04/',StatFilnm))
     stationdata.DT <- readRDS(StatFullFile)
     #setorder(stationdata.DT, -RAIN)
-    
+
     # Append data.tables into 1 
     filesappend <- list(griddeddata.DT, stationdata.DT) 
     setattr(filesappend, 'names', c('NARR_Data', 'Station_Data'))
-    cmbwthrdat.DT <- rbindlist(filesappend, use.names=TRUE, fill=TRUE, idcol='WTHRDATATYPE')    
-    
+    cmbwthrdat.DT <- rbindlist(filesappend, use.names=TRUE, fill=TRUE, idcol='WTHRDATATYPE') 
+
     # Plot each weather variable
     collength <- dim(cmbwthrdat.DT)[2]
     namesin <- names(cmbwthrdat.DT)[3:collength] 
     for (i in 1:length(namesin)) { 
+      # Copy data for next variable
+      cmbwthrdat.DF <- copy(cmbwthrdat.DT)
+      cmbwthrdat.DF <- setDF(cmbwthrdat.DF)
+
       # Select weather variable for plotting
       x <- namesin[i] 
-      
+
       # Set plot legend title and export image name
       legend_title <- 'Climate Type'
       imageO_title <- paste0('Pyrome_',PYROMEIN,'_',x,'.png')
       
-      # Initialize ggplot 
+      # Initialize ggplot ############################################# TIMESERIES
       theme_set(
         theme_minimal() +
         theme(legend.position = "right") 
       )
       
       # Create output directory if required
-      outputDIR <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/Plots/',x))
+      outputDIR <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/Plots/TimeSeries/',x))
       if (!dir.exists(outputDIR)) {dir.create(outputDIR)}
       setwd(outputDIR)
 
@@ -1054,20 +1123,233 @@ for (ipyr in 30:length(pyromes)) { ipyr <- 29
       png(width=1000, height=500)
       print(the_plot)
       dev.off()
-      ggsave(imageO_title, the_plot, width = 9, height = 9)      
+      ggsave(imageO_title, the_plot, width = 9, height = 9) 
+      # End ggplot ############################################# TIMESERIES
 
       #unlink(paste0(title,'.png))
-      rm(the_plot,imageO_title)
+      rm(the_plot,imageO_title,the_scat,imageO_titlesctr)
     } # Plot each weather variable
  
   } # Select pyromes
 } # All pyromes 
 
 
+# Get min date values from NARR data limit station data to this start date
+mindate <- min(griddeddata.DT[,DATE])
+stationdata.DT <- stationdata.DT[DATE >= mindate]
+
+# Evaluate blocks of consecutive years with data
+stationdata.DT.CPY<- copy(stationdata.DT)
+stationdata.DT.CPY[, YEAR := year(DATE)]
+stationdata.DT.CPY[, c('YEAR') := lapply(.SD, as.numeric), .SDcols='YEAR']
+cols <- names(stationdata.DT.CPY)
+colsin <- cols[2:9]
+stationdata.DT.CPY <- na.omit(stationdata.DT.CPY, cols=colsin)
+stationdata.DT_uni <- unique(stationdata.DT.CPY, by = 'YEAR')
+year.DT_uni <- stationdata.DT_uni[, YEAR]
+yrtest <- seqle(year.DT_uni)
+yrtest$lengths
+yrtest$values
+yrtest <- data.frame(start=yrtest$values, len=yrtest$lengths)
+yrtest$YEARBLOCK <- seq.int(nrow(yrtest))
+yrtest <- yrtest[rep(seq_len(nrow(yrtest)), yrtest$len), 1:3]
+yrtest.DT <- data.table(yrtest)
+yrtest.DT[ , diff := start - shift(start)] 
+yrtest.DT[, counter := seq_len(.N), by = list(start, cumsum(len == 1L))]
+yrtest.DT[, YEAR := (counter - 1) + start]
+seltvar <- c('YEARBLOCK', 'YEAR', 'len')
+yrtest.DT <- yrtest.DT[, ..seltvar]
+
+# Create lookup to consecutive year blocks
+setkey(yrtest.DT,'YEAR')
+setkey(stationdata.DT,'YEAR')
+stationdata.DT <- stationdata.DT[yrtest.DT, allow=TRUE]
+
+# Remove entries in station data where all variables are NA  
+cmbwthrdat.DF <- drop_rows_all_na(cmbwthrdat.DF, 0.8)
+
+# Initialize ggplot ############################################# SCATTER 
+theme_set(
+  theme_minimal() +
+    theme(legend.position = "right") 
+)
+
+# Create output directory if required
+outputDIR <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/Plots/Scatter/',x))
+if (!dir.exists(outputDIR)) {dir.create(outputDIR)}
+setwd(outputDIR)      
+
+# Set plot legend title and export image name
+legend_titlesctr <- 'Climate Type'
+imageO_titlesctr <- paste0('Pyrome_',PYROMEIN,'_',x,'Sctr.png')
+
+# Change the confidence interval fill color
+the_scat <- ggplot(cmbwthrdat.DT, aes(x = !!ensym(x), y = !!ensym(x))) + 
+  geom_point(shape=18, color="blue")+
+  geom_smooth(method=lm,  linetype="dashed",
+              color="darkred", fill="blue")
+
+# Image export details
+png(width=1000, height=500)
+print(the_scat)
+dev.off()
+ggsave(imageO_titlesctr, legend_titlesctr, width = 9, height = 9)
+# End ggplot ############################################# SCATTER
+
+##################################################################################################################
+## Section: Test FireFamilyPlus data back filling algorithms
+##################################################################################################################
+
+# Check directory
+initial_path <- file.path(paste0(ROOT_DATA_DIR,'/',OUTPUT_DIR,'/','Expmnt_003/008/DataFillTest'))
+setwd(initial_path)
+wd <- getwd()
+print(paste0('Current working dir: ', wd))
+
+# Collect names of file of interest - wlstinv1!500100.txt individual station index files
+filesin <- list.files(pattern = 'Daily', recursive = TRUE, full.names = TRUE)
+filenamesin <- basename(list.files(pattern = 'Daily', recursive = TRUE))
+numfiles <- length(filenamesin)
+
+# Initialize data.table to hold data for all pyromes 
+wthrvars.DT <- data.table(NULL)
+
+# Loop through indexfiles collecting weather variables by pyrome
+for (j in 1:length(filesin)) { 
+  # Create connection
+  file <- filesin[j]
+  FLNAMEIN <- filenamesin[j]
+  pyromein <- paste0('008_',substring(file,23,nchar(file)))
+                                  
+  # Read data to data.table line by line
+  ERC.DT <- fread(file, colClasses = "character",
+                  sep = ',', header = FALSE, verbose = TRUE)
+  
+  # Delete meta data and header followed by dummy column 49
+  ERC.DT[, 49 := NULL]
+  
+  # Pass data from text DT to final DT
+  Headernames <- c('SIGName','DATE','Time','Temp','AvgT','MinT','MaxT','RH','AvRH','MnRH','MxRH','Rain','RnDr','Wind',
+                   'SC','ERC','BI','KBDI','IC','FM1','FM10','F100','F1000','FMH','FMW','SFlag','WDIR','SOW','FFMC',
+                   'DMC','DC','ISI','BUI','FWI','DSR','GDir','GSpd','SolR','WFlag','DPT','VPDM','VPDA','GSI','WAZI',
+                   'HrRa','LHerb','LWood','FFWI')
+  
+  oldnames <- names(ERC.DT)
+  setnames(ERC.DT, old = oldnames, new = Headernames, skip_absent=TRUE)
+  
+  # Add Pyrome reference column
+  ERC.DT[,PYROME := pyromein]
+  
+  # Append pyrome data to master data DT
+  if (j == 1) {
+    wthrvars.DT <- ERC.DT
+  } else {
+    # Write top 4 grid locations
+    filesappend <- list(wthrvars.DT, ERC.DT) 
+    wthrvars.DT <- rbindlist(filesappend, use.names=TRUE, fill=TRUE)  
+  }
+  rm(ERC.DT)
+} # Loop through list of files containing weather variables for each pyrome
+
+# Process wthrvars.DT containing data for all Pyromes processed
+DTlist <- split(wthrvars.DT, by = 'PYROME')
+
+# Quick compare of data sets
+ModifidDataWithDataFill <- as.data.table(DTlist[[1]])
+ModifidDataWithDataFill[, PYROME := NULL]
+NODataFill <- as.data.table(DTlist[[2]])
+NODataFill[, PYROME := NULL]
+WithDataFill <- as.data.table(DTlist[[3]])
+WithDataFill[, PYROME := NULL]
+
+isTRUE(all.equal(NODataFill, WithDataFill))
+isTRUE(all.equal(NODataFill, ModifidDataWithDataFill))
+
+
+sapply(wthrvars.DT, class)
+collength <- dim(wthrvars.DT)[2] 
+convert_to_number <- colnames(wthrvars.DT)[4:collength]
+convert_to_number_in <- convert_to_number[1:length(convert_to_number) - 1]
+wthrvars.DT[, c(convert_to_number_in) := lapply(.SD, as.numeric), .SDcols=convert_to_number_in]
+sapply(wthrvars.DT, class)
+wthrvars.DT[, ROWID := .I]
+
+# Reformat date column
+cols <- c('DATE')
+wthrvars.DT[, DATE := lapply(.SD, function(x){gsub('/', '-', x)}), .SDcols = cols]
+
+# Create day/month and year columns
+wthrvars.DT.out <- wthrvars.DT[, as.list(str_split_fixed(DATE, '-', 3)), by=DATE] 
+setnames(wthrvars.DT.out, old = c('V1', 'V2', 'V3'), new = c('MONTH', 'DAY', 'YEAR'))
+setkey(wthrvars.DT,'DATE')
+setkey(wthrvars.DT.out,'DATE')
+wthrvars.DT <- wthrvars.DT[wthrvars.DT.out, allow=TRUE]
+wthrvars.DT[, CORDDATE := paste0(YEAR,'-',MONTH,'-',DAY)]
+setorder(wthrvars.DT, ROWID)
+collength <- dim(wthrvars.DT)[2] 
+convert_to_number <- colnames(wthrvars.DT)[collength - 1] # YEAR column
+wthrvars.DT[, c(convert_to_number) := lapply(.SD, as.integer), .SDcols=convert_to_number]
+
+# Remove leap year days - Appears no leap year in data!
+wthrvars.DT <- subset(wthrvars.DT, !(DAY == '29' & MONTH == '02'))
+wthrvars.DT[, DAYOFYR := as.integer(yday(CORDDATE))]
+wthrvars.DT[, DAYOFYR := DAYOFYR][(DAYOFYR > 60) & is.leapyear(YEAR) == TRUE, DAYOFYR := DAYOFYR - 1][]
+wthrvars.DT[, c('YEAR') := lapply(.SD, as.numeric), .SDcols='YEAR']
+wthrvars.DT[, CORDDATE := parse_date_time(CORDDATE, 'Ymd')]
+
+# Extract data variables 
+seltvar <- c('PYROME','MONTH','DAY','YEAR','CORDDATE','DAYOFYR','Temp','AvgT','MinT','MaxT','RH','AvRH','MnRH','MxRH','ERC')
+wthrvars.DT <- wthrvars.DT[, ..seltvar]
+sapply(wthrvars.DT, class)
+#wthrvars.DT[, PYROME := sprintf("%03d", as.integer(PYROME))] 
+
+# Get min and max date values for complete timeseries
+mindate <- min(wthrvars.DT[,CORDDATE])
+maxdate <- max(wthrvars.DT[,CORDDATE])  
+cont_date_time <- as.data.table(data.frame(seq(as.Date(mindate), as.Date(maxdate), 'days')))
+setnames(cont_date_time, 1, 'CORDDATE')
+cont_date_time[, CORDDATE := parse_date_time(CORDDATE, 'Ymd')]
+
+# Re-orienetate data and merge to continuous date DT
+DTlist <- split(wthrvars.DT, by = 'PYROME')
+CMDN.DTs <- cont_date_time[DTlist[1], on='CORDDATE'][DTlist[2], on='CORDDATE'][DTlist[3], on='CORDDATE']
+
+pattern <- c('Temp')
+tifsperrds <- as.matrix(sapply(pattern, function(x) grepl(x, colnames(CMDN.DTs))))
+indxs <- which(apply(tifsperrds, 1, function(x) all(x == c(TRUE))))
+seltvar <- colnames(CMDN.DTs)[indxs]
+seltvar <- c('CORDDATE',seltvar)
+CMDN.DTs.Slct <- CMDN.DTs[, ..seltvar]
+
+keep_rows_all <- function(x, pct=1) x[rowSums(is.na(x)) >= ncol(x)*pct,]
+CMDN.DTs.TEST <- keep_rows_all(CMDN.DTs.Slct,.1)
+
+'008_ModifidDataWithDataFill.txt temp' 
+'008_NODataFill.txt i.temp' 
+'008_WithDataFill.txt i.temp.1'
+
+# Convert pyrome station data to data frame for plotting
+stationdata.DF <- copy(wthrvars.DT)
+stationdata.DF <- setDF(stationdata.DF)
+
+ggplot() +
+  geom_line(data = stationdata.DF, aes(x = CORDDATE, y = Temp , color = PYROME , group=PYROME ), alpha = 1, size = 0.65) +
+  labs(x="Date",y=expression('Precipitation Amount (inches)')) +
+  theme(text = element_text(size=10))
+
+ggplot(stationdata.DF, aes(x = CORDDATE, y = Temp)) + 
+  geom_line() + 
+  facet_wrap(~ PYROME, scales = 'free_y', ncol = 1)
 
 ##################################################################################################################
 ## Section: Define miscellaneous functions
 ##################################################################################################################
+
+# Join data to DT of consecutive days covering tim eperiod of data
+Merged.DTs <- Reduce(function(x,y) merge(x,y,all=TRUE) , filesappend)
+
+# Remove entries in station data where all variables are NA  
+drop_rows_all_na <- function(x, pct=1) x[!rowSums(is.na(x)) >= ncol(x)*pct,]
 
 #Returns all items in a list that are not contained in toMatch
 #toMatch can be a single item or a list of items
